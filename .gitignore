@@ -1,4 +1,5 @@
 .qodo
 app/*.pdf
-.env
+app/.env
+
 __pycache__
