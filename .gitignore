@@ -1,0 +1,4 @@
+.qodo
+app/*.pdf
+
+__pycache__
