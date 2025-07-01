@@ -1,29 +1,38 @@
 from langchain_openai import ChatOpenAI
+from langchain.chat_models import init_chat_model
 import os
 from dotenv import load_dotenv
-from langchain.agents import initialize_agent, AgentType
+from langchain_openai import ChatOpenAI
 from app.agents.tools.document_tools import ingest_tool
+from PyPDF2 import PdfReader
+from langgraph.prebuilt import ToolNode, tools_condition
+from typing import Annotated
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from PyPDF2 import PdfReader
+
+class State(TypedDict):
+    # Messages have the type "list". The `add_messages` function
+    # in the annotation defines how this state key should be updated
+    # (in this case, it appends messages to the list, rather than overwriting them)
+    messages: Annotated[list, add_messages]
+
+
+graph_builder = StateGraph(State)
 
 
 load_dotenv()
 
 
-llm = ChatOpenAI()
+
+def chatbot(state: State):
+    return {"messages": [llm_with_tools.invoke(state["messages"])]}
 
 
 
-agent = initialize_agent(
-    tools=[ingest_tool],
-    llm=llm,
-    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    verbose=True
-)
 
-# Example usage: agent receives a task to ingest a document
-result = agent.run("Ingest this document: 'This is a sample contract text to be embedded and stored.'")
-print(result)
 
-from PyPDF2 import PdfReader
 
 # Path to your PDF
 pdf_path = os.path.join(os.path.dirname(__file__), "../contrato_falso_test.pdf")
@@ -34,6 +43,40 @@ pdf_text = ""
 for page in reader.pages:
     pdf_text += page.extract_text() or ""
 
-# Now use the agent to ingest the PDF text
-result = agent.run(f"Ingest this document: '{pdf_text}'")
-print(result)
+tools = [ingest_tool]
+
+
+llm = init_chat_model(
+    model="gpt-4.1-mini-2025-04-14",
+    openai_api_key=os.getenv("api_key"),
+    openai_api_base=os.getenv("base_url"),
+
+)
+
+llm_with_tools = llm.bind_tools(tools)
+
+tool_node = ToolNode(tools)
+
+graph_builder.add_node("chatbot", chatbot)
+graph_builder.add_node("tools", tool_node)
+graph_builder.add_conditional_edges("chatbot", tools_condition )
+graph_builder.add_edge("tools", "chatbot")
+graph_builder.add_edge(START, "chatbot")
+graph_builder.add_edge("chatbot", END)
+graph = graph_builder.compile()
+
+
+
+def stream_graph_updates(user_input: str):
+    for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
+        for value in event.values():
+            print("Assistant:", value["messages"][-1].content)
+
+
+def __init__():
+
+    response = stream_graph_updates(f"Please use the ingest_document tool to store this document: {pdf_text}")
+    print(response)
+
+__init__()
+
