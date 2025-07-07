@@ -3,13 +3,14 @@ from langchain.chat_models import init_chat_model
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from app.agents.tools.document_tools import ingest_tool, summarize_tool
+from app.agents.tools.document_tools import ingest_document_tool, summarize_tool, question_answer_tool
 from PyPDF2 import PdfReader
 from langgraph.prebuilt import ToolNode, tools_condition
 from typing import Annotated
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from langchain_core.messages import SystemMessage
 from PyPDF2 import PdfReader
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -26,6 +27,23 @@ class State(TypedDict):
 memory = MemorySaver()
 
 graph_builder = StateGraph(State)
+
+initial_message = {
+    "messages": [SystemMessage(content="""You are a helpful assistant specialized in analyzing and summarizing documents. Your task is to answer any question about the document that has been pre-processed and stored as chunk IDs in the state.
+    
+    IMPORTANT: The document has already been ingested and is available as chunk IDs in the state. You do NOT need to ingest it again.
+    
+    CRITICAL: When using tools, you MUST pass the chunk_ids from the state. The chunk_ids are stored in the state and contain the actual document chunks.
+    
+    Use the available tools:
+    - summarize_document: Pass the chunk_ids from state as the 'ids' parameter
+    - question_answer: Pass the chunk_ids from state as the 'ids' parameter and provide the question
+    
+    Example: If the state contains chunk_ids: ['anon_1_0', 'anon_1_1'], use those exact IDs when calling tools.
+    
+    If the user asks for a document and no chunk IDs are available in the state, respond with "I do not have a document to analyze. Please provide a document first."
+    """)]
+}
 
 load_dotenv()
 
@@ -45,7 +63,7 @@ pdf_text = ""
 for page in reader.pages:
     pdf_text += page.extract_text() or ""
 
-tools = [ingest_tool, summarize_tool]
+tools = [summarize_tool, question_answer_tool]
 
 
 llm = init_chat_model(
@@ -69,13 +87,20 @@ graph = graph_builder.compile(checkpointer=memory)
 
 config = {"configurable": {"thread_id": "1"}}
 
-
+chunks = ingest_document_tool(pdf_text)['chunk_ids']
+print(f"Generated chunk IDs: {chunks}")
 
 
 def __init__():
 
+
+    state = {
+        "messages": initial_message["messages"] + [{"role": "user", "content": "Please summarize the document and then answer: What is this document about? Is it a contract?"}],
+        "chunk_ids": chunks
+    }
+
     events = graph.stream(
-        {"messages": [{"role": "user", "content": f"ingest and summarize the next document: {pdf_text}"}]},
+        state,
         config,
         stream_mode="values",
     )
